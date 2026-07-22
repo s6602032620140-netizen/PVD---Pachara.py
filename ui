@@ -1,0 +1,176 @@
+import streamlit as st
+import math
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# ================= ตั้งค่าหน้าเพจ =================
+st.set_page_config(page_title="PVD Consolidation Calculator", layout="wide", initial_sidebar_state="collapsed")
+
+# Custom CSS เพื่อตกแต่งให้ UI สวยงามขึ้น
+st.markdown("""
+    <style>
+    .main-header { font-size: 2.5rem; color: #1E88E5; text-align: center; font-weight: bold; margin-bottom: 0px;}
+    .sub-header { font-size: 1.2rem; color: #546E7A; text-align: center; margin-bottom: 30px;}
+    .metric-card { background-color: #F1F8E9; padding: 20px; border-radius: 10px; box-shadow: 2px 2px 5px rgba(0,0,0,0.1);}
+    </style>
+""", unsafe_allow_html=True)
+
+# ================= ส่วนหัวโปรแกรม =================
+st.markdown('<div class="main-header">เครื่องมือออกแบบและวิเคราะห์ PVD</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">โปรแกรมคำนวณการปรับปรุงคุณภาพดินด้วย Prefabricated Vertical Drains</div>', unsafe_allow_html=True)
+st.divider()
+
+# ================= 1. ส่วนรับข้อมูล (Input Section) =================
+st.header("📝 1. กำหนดพารามิเตอร์ (Input Parameters)")
+
+# แบ่งหน้าจอเป็น 3 คอลัมน์
+col_in1, col_in2, col_in3 = st.columns(3)
+
+with col_in1:
+    st.markdown("### 🌍 ข้อมูลชั้นดิน (Soil)")
+    H = st.number_input("ความหนาชั้นดินเหนียว H (m)", value=30.0, step=1.0)
+    Hd = st.number_input("ระยะระบายน้ำแนวดิ่ง Hd (m)", value=15.0, help="เช่น H/2 สำหรับ Double drainage")
+    Cv = st.number_input("สปส.อัดตัวคายน้ำแนวดิ่ง Cv (m²/day)", value=0.002, format="%.4f")
+    kr_kv = st.number_input("อัตราส่วน kr/kv", value=7.0, step=0.5)
+
+with col_in2:
+    st.markdown("### 🏗️ ข้อมูลวัสดุ PVD")
+    a_mm = st.number_input("ความหนา PVD a (mm)", value=5.0) 
+    b_mm = st.number_input("ความกว้าง PVD b (mm)", value=100.0)
+    a = a_mm / 1000
+    b = b_mm / 1000
+    dw_method = st.selectbox("วิธีหา Equivalent Diameter", ["Rixner", "Hansbo"])
+    pattern = st.selectbox("รูปแบบการติดตั้ง", ["Square (สี่เหลี่ยม)", "Triangular (สามเหลี่ยม)"])
+    S = st.number_input("ระยะห่าง PVD, S (m)", value=1.0, step=0.1)
+
+with col_in3:
+    st.markdown("### 📉 การทรุดตัว & เวลา")
+    Cc = st.number_input("Compression Index (Cc)", value=0.29, step=0.01)
+    e0 = st.number_input("Initial Void Ratio (e0)", value=1.10, step=0.01)
+    sigma0 = st.number_input("Effective Stress เดิม σ'0 (kN/m²)", value=40.0, step=5.0)
+    d_sigma = st.number_input("น้ำหนัก Preload เพิ่มขึ้น Δσ (kN/m²)", value=80.0, step=5.0)
+    t = st.number_input("⏱️ เวลาที่ต้องการวิเคราะห์ t (วัน)", value=90.0, step=10.0)
+
+# Expander สำหรับส่วนเสริม (ซ่อนไว้เพื่อไม่ให้รก)
+with st.expander("🏖️ ตั้งค่าชั้นทรายซับน้ำ (Sand Mat - คลิกเพื่อเปิด/ปิด)"):
+    use_sand_mat = st.checkbox("พิจารณาผลกระทบความต้านทานจาก Sand Mat")
+    col_sm1, col_sm2 = st.columns(2)
+    with col_sm1:
+        Hm = st.number_input("ความหนา Sand Mat, Hm (m)", value=0.5, step=0.1)
+        B = st.number_input("ระยะครึ่งความกว้างแผ่นทราย, B (m)", value=40.0, step=1.0)
+    with col_sm2:
+        kc = st.number_input("ค่าการซึมน้ำของดินเหนียว, kc (m/s)", value=1e-9, format="%.1e")
+        km = st.number_input("ค่าการซึมน้ำของแผ่นทราย, km (m/s)", value=1e-5, format="%.1e")
+    if not use_sand_mat:
+        L = 0.0
+
+# ================= ส่วนคำนวณ (Calculations) =================
+# (ตรรกะการคำนวณเดิมทั้งหมด นำมาประมวลผลตรงกลาง)
+if dw_method == "Rixner":
+    dw = (a + b) / 2
+else:
+    dw = 2 * (a + b) / math.pi
+
+if pattern == "Square (สี่เหลี่ยม)":
+    de = 1.13 * S
+else:
+    de = 1.05 * S
+
+n = de / dw
+Fn = ((n**2) / (n**2 - 1)) * math.log(n) - ((3 * n**2 - 1) / (4 * n**2))
+Cr = kr_kv * Cv
+Tr = (Cr * t) / (de**2)
+
+if use_sand_mat:
+    L = (32 / (math.pi**2)) * (1 / (n**2)) * (H / Hm) * (kc / km) * ((B / dw)**2)
+else:
+    L = 0.0
+
+Ur = 1 - math.exp((-8 * Tr) / (Fn + 0.8 * L))
+Tv = (Cv * t) / (Hd**2)
+Uv = math.sqrt(4 * Tv) / math.pi if math.sqrt(4 * Tv) / math.pi <= 1 else 1.0
+Uav = 1 - (1 - Ur) * (1 - Uv)
+
+S_final = H * (Cc / (1 + e0)) * math.log10((sigma0 + d_sigma) / sigma0)
+St = Uav * S_final
+
+# ================= 2. ส่วนแสดงผลสรุป (Dashboard Outputs) =================
+st.divider()
+st.header("📊 2. สรุปผลการประเมิน (Dashboard)")
+
+# แสดงผลแบบกล่องตัวเลขขนาดใหญ่ (Metrics)
+col_out1, col_out2, col_out3 = st.columns(3)
+col_out1.metric(label="✅ ระดับการอัดตัวคายน้ำเฉลี่ยรวม (U_av)", value=f"{Uav*100:.2f} %")
+col_out2.metric(label="🎯 การทรุดตัวเป้าหมายสูงสุด (S_final)", value=f"{S_final:.4f} m")
+col_out3.metric(label=f"⏳ การทรุดตัว ณ เวลา {t} วัน (S_t)", value=f"{St:.4f} m", delta=f"{St/S_final*100:.1f}% ของเป้าหมาย")
+
+# ================= 3. ส่วนแสดงสมการ (Educational Step-by-Step) =================
+st.markdown("<br>", unsafe_allow_html=True)
+st.subheader("📐 ขั้นตอนและสมการที่ใช้คำนวณ (Step-by-Step)")
+
+# ใช้ Tabs เพื่อจัดระเบียบสมการ ไม่ให้หน้าจอยาวเกินไป
+tab1, tab2, tab3 = st.tabs(["1. พารามิเตอร์ PVD", "2. การอัดตัวคายน้ำ (Consolidation)", "3. การทรุดตัว (Settlement)"])
+
+with tab1:
+    st.latex(r"d_w = " + f"{dw:.4f} \\text{{ m}}")
+    st.latex(r"d_e = " + f"{de:.4f} \\text{{ m}}")
+    st.latex(r"n = \frac{d_e}{d_w} = " + f"{n:.2f}")
+    st.latex(r"F_n = \frac{n^2}{n^2-1}\ln(n) - \frac{3n^2-1}{4n^2} = " + f"{Fn:.4f}")
+
+with tab2:
+    st.latex(r"C_r = \left(\frac{k_r}{k_v}\right) C_v = " + f"{Cr:.4f} \\text{{ m}}^2\\text{{/day}}")
+    st.latex(r"T_r = \frac{C_r \cdot t}{d_e^2} = " + f"{Tr:.4f}")
+    if use_sand_mat:
+        st.latex(r"L = \frac{32}{\pi^2} \cdot \frac{1}{n^2} \cdot \frac{H}{H_m} \cdot \frac{k_c}{k_m} \cdot \left(\frac{B}{d_w}\right)^2 = " + f"{L:.4f}")
+        st.latex(r"U_r = 1 - \exp\left(\frac{-8T_r}{F_n + 0.8L}\right) = " + f"{Ur*100:.2f}\\%")
+    else:
+        st.latex(r"U_r = 1 - \exp\left(\frac{-8T_r}{F_n}\right) = " + f"{Ur*100:.2f}\\%")
+    
+    st.latex(r"T_v = \frac{C_v \cdot t}{H_d^2} = " + f"{Tv:.5f}")
+    st.latex(r"U_v \approx \frac{\sqrt{4 \cdot T_v}}{\pi} = " + f"{Uv*100:.2f}\\%")
+    st.latex(r"U_{av} = 1 - (1 - U_r)(1 - U_v) = " + f"{Uav*100:.2f}\\%")
+
+with tab3:
+    st.latex(r"S_{final} = H \cdot \frac{C_c}{1+e_0} \cdot \log\left(\frac{\sigma'_0 + \Delta\sigma}{\sigma'_0}\right) = " + f"{S_final:.4f} \\text{{ m}}")
+    st.latex(r"S_t = U_{av} \times S_{final} = " + f"{St:.4f} \\text{{ m}}")
+
+# ================= 4. ส่วนแสดงกราฟ (Visualization) =================
+st.divider()
+st.header("📈 3. กราฟวิเคราะห์พฤติกรรมการทรุดตัว (0-365 วัน)")
+
+time_array = np.arange(1, 366, 5)
+Uav_array = []
+St_array = []
+
+for time_step in time_array:
+    temp_Tr = (Cr * time_step) / (de**2)
+    temp_Ur = 1 - math.exp((-8 * temp_Tr) / (Fn + 0.8 * L))
+    temp_Tv = (Cv * time_step) / (Hd**2)
+    temp_Uv = math.sqrt(4 * temp_Tv) / math.pi
+    if temp_Uv > 1.0: temp_Uv = 1.0
+    temp_Uav = 1 - (1 - temp_Ur) * (1 - temp_Uv)
+    temp_St = temp_Uav * S_final
+    Uav_array.append(temp_Uav * 100)
+    St_array.append(temp_St)
+
+fig, ax1 = plt.subplots(figsize=(12, 5))
+
+# ปรับแต่งสไตล์กราฟให้ดูคลีนขึ้น
+ax1.grid(True, linestyle='--', alpha=0.6)
+color1 = '#1f77b4'
+ax1.set_xlabel('ระยะเวลา - Time (Days)', fontsize=12)
+ax1.set_ylabel('การทรุดตัว - Settlement (m)', color=color1, fontsize=12)
+ax1.plot(time_array, St_array, color=color1, linewidth=2.5, label='Settlement (m)')
+ax1.tick_params(axis='y', labelcolor=color1)
+ax1.axhline(y=S_final, color=color1, linestyle='--', alpha=0.4, label='Ultimate Settlement')
+
+ax2 = ax1.twinx()  
+color2 = '#d62728'
+ax2.set_ylabel('ระดับการอัดตัว - Degree of Consolidation (%)', color=color2, fontsize=12)  
+ax2.plot(time_array, Uav_array, color=color2, linewidth=2.5, linestyle='-.', label='Consolidation (%)')
+ax2.tick_params(axis='y', labelcolor=color2)
+ax2.set_ylim([0, 105])
+
+fig.tight_layout()  
+st.pyplot(fig)
