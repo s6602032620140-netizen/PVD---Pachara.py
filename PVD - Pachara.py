@@ -1,161 +1,159 @@
-import streamlit as st
 import math
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="PVD Consolidation Calculator", layout="wide")
+class PVDCalculator:
+    """
+    คลาสสำหรับคำนวณการปรับปรุงคุณภาพดินด้วยวิธี Prefabricated Vertical Drains (PVD)
+    อ้างอิงสมการจากทฤษฎี Barron, Terzaghi, Carillo และการคำนวณ Sand Mat
+    """
 
-st.title("เครื่องมือคำนวณการปรับปรุงคุณภาพดินด้วย PVD")
-st.markdown("โปรแกรมนี้ใช้ทฤษฎีของ Barron, Terzaghi และ Carillo ในการคำนวณอัตราการอัดตัวคายน้ำและการทรุดตัวของดิน")
+    @staticmethod
+    def calc_equivalent_diameter(a: float, b: float, method: str = "rixner") -> float:
+        """
+        คำนวณเส้นผ่านศูนย์กลางสมมูลของแผ่นระบายน้ำ (dw)
+        :param a: ความหนาของ PVD (เช่น mm หรือ m)
+        :param b: ความกว้างของ PVD (เช่น mm หรือ m)
+        :param method: "rixner" (a+b)/2 หรือ "hansbo" 2(a+b)/pi
+        :return: dw (หน่วยเดียวกับ a และ b)
+        """
+        if method.lower() == "hansbo":
+            return 2 * (a + b) / math.pi
+        else:
+            return (a + b) / 2.0  # Rixner method (นิยมใช้ในเอกสาร)
 
-# ================= แถบด้านข้างสำหรับรับค่าพารามิเตอร์ (Sidebar Inputs) =================
-st.sidebar.header("1. คุณสมบัติของดิน (Soil Properties)")
-H = st.sidebar.number_input("ความหนาของชั้นดินเหนียว H (m)", value=30.0)
-Hd = st.sidebar.number_input("ระยะระบายน้ำแนวดิ่ง Hd (m) (เช่น H/2 สำหรับ Double drainage)", value=15.0)
-Cv = st.sidebar.number_input("สัมประสิทธิ์การอัดตัวคายน้ำแนวดิ่ง Cv (m²/day)", value=0.002, format="%.4f")
-kr_kv = st.sidebar.number_input("อัตราส่วน kr/kv", value=7.0)
+    @staticmethod
+    def calc_effective_diameter(S: float, pattern: str = "square") -> float:
+        """
+        คำนวณเส้นผ่านศูนย์กลางอิทธิพล (de)
+        :param S: ระยะห่างระหว่าง PVD
+        :param pattern: "square" (สี่เหลี่ยม) หรือ "triangular" (สามเหลี่ยม)
+        :return: de (หน่วยเดียวกับ S)
+        """
+        if pattern.lower() == "triangular":
+            return 1.05 * S
+        else:
+            return 1.13 * S
 
-st.sidebar.header("2. พารามิเตอร์การทรุดตัว (Settlement Parameters)")
-Cc = st.sidebar.number_input("Compression Index (Cc)", value=0.29)
-e0 = st.sidebar.number_input("Initial Void Ratio (e0)", value=1.10)
-sigma0 = st.sidebar.number_input("Effective Overburden Stress เดิม σ'0 (kN/m²)", value=40.0)
-d_sigma = st.sidebar.number_input("น้ำหนักบรรทุกที่เพิ่มขึ้น Δσ (kN/m²)", value=80.0)
-
-st.sidebar.header("3. คุณสมบัติของ PVD (PVD Properties)")
-a = st.sidebar.number_input("ความหนาของแผ่น PVD a (mm)", value=5.0) / 1000  # แปลงเป็น m
-b = st.sidebar.number_input("ความกว้างของแผ่น PVD b (mm)", value=100.0) / 1000 # แปลงเป็น m
-dw_method = st.sidebar.selectbox("วิธีคำนวณ Equivalent Diameter (dw)", ["Rixner", "Hansbo"])
-pattern = st.sidebar.selectbox("รูปแบบการติดตั้ง PVD", ["Square (สี่เหลี่ยม)", "Triangular (สามเหลี่ยม)"])
-S = st.sidebar.number_input("ระยะห่างระหว่าง PVD, S (m)", value=1.0)
-
-st.sidebar.header("4. ชั้นทรายซับน้ำ (Sand Mat) - หากมี")
-use_sand_mat = st.sidebar.checkbox("พิจารณาผลกระทบจาก Sand Mat (ค่า L)")
-if use_sand_mat:
-    Hm = st.sidebar.number_input("ความหนาของ Sand Mat, Hm (m)", value=0.5)
-    B = st.sidebar.number_input("ครึ่งหนึ่งของความกว้างแผ่นทราย, B (m)", value=40.0)
-    kc = st.sidebar.number_input("ค่าการซึมน้ำของดินเหนียว, kc (m/s)", value=1e-9, format="%.1e")
-    km = st.sidebar.number_input("ค่าการซึมน้ำของแผ่นทราย, km (m/s)", value=1e-5, format="%.1e")
-else:
-    L = 0.0
-
-st.sidebar.header("5. เวลาที่ต้องการคำนวณ")
-t = st.sidebar.number_input("เวลา t (วัน)", value=90.0)
-
-# ================= ส่วนการคำนวณ (Calculations) =================
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("ผลการคำนวณพารามิเตอร์ PVD")
-    
-    # 1. คำนวณ dw
-    if dw_method == "Rixner":
-        dw = (a + b) / 2
-        st.latex(r"d_w = \frac{a+b}{2} = " + f"{dw:.4f} \\text{{ m}}")
-    else:
-        dw = 2 * (a + b) / math.pi
-        st.latex(r"d_w = \frac{2(a+b)}{\pi} = " + f"{dw:.4f} \\text{{ m}}")
+    @staticmethod
+    def calc_spacing_factor(de: float, dw: float) -> float:
+        """
+        คำนวณตัวประกอบระยะห่างของแผ่นระบายน้ำ (Fn) ตามวิธีของ Barron (ไม่คิด Smear Zone)
+        :param de: เส้นผ่านศูนย์กลางอิทธิพล
+        :param dw: เส้นผ่านศูนย์กลางสมมูลของ PVD
+        :return: Fn
+        """
+        n = de / dw
+        if n <= 1:
+            raise ValueError("ค่า n (de/dw) ต้องมากกว่า 1")
         
-    # 2. คำนวณ de
-    if pattern == "Square (สี่เหลี่ยม)":
-        de = 1.13 * S
-        st.latex(r"d_e = 1.13S = " + f"{de:.4f} \\text{{ m}}")
-    else:
-        de = 1.05 * S
-        st.latex(r"d_e = 1.05S = " + f"{de:.4f} \\text{{ m}}")
-        
-    # 3. คำนวณ n และ Fn
-    n = de / dw
-    Fn = ((n**2) / (n**2 - 1)) * math.log(n) - ((3 * n**2 - 1) / (4 * n**2))
-    st.latex(r"n = \frac{d_e}{d_w} = " + f"{n:.2f}")
-    st.latex(r"F_n = \frac{n^2}{n^2-1}\ln(n) - \frac{3n^2-1}{4n^2} = " + f"{Fn:.4f}")
-    
-    # 4. คำนวณ Cr และ Tr
-    Cr = kr_kv * Cv
-    Tr = (Cr * t) / (de**2)
-    st.latex(r"C_r = \left(\frac{k_r}{k_v}\right) C_v = " + f"{Cr:.4f} \\text{{ m}}^2\\text{{/day}}")
-    st.latex(r"T_r = \frac{C_r \cdot t}{d_e^2} = " + f"{Tr:.4f}")
+        term1 = (n**2 / (n**2 - 1)) * math.log(n)
+        term2 = (3 * n**2 - 1) / (4 * n**2)
+        return term1 - term2
 
-with col2:
-    st.subheader("ผลการคำนวณการอัดตัวคายน้ำ")
-    
-    # 5. คำนวณ Sand Mat Resistance (L)
-    if use_sand_mat:
-        L = (32 / (math.pi**2)) * (1 / (n**2)) * (H / Hm) * (kc / km) * ((B / dw)**2)
-        st.markdown("**ดัชนีความต้านทานต่อการระบายน้ำ (L):**")
-        st.latex(r"L = \frac{32}{\pi^2} \cdot \frac{1}{n^2} \cdot \frac{H}{H_m} \cdot \frac{k_c}{k_m} \cdot \left(\frac{B}{d_w}\right)^2 = " + f"{L:.4f}")
-    
-    # 6. คำนวณ Ur
-    Ur = 1 - math.exp((-8 * Tr) / (Fn + 0.8 * L))
-    if use_sand_mat:
-        st.latex(r"U_r = 1 - \exp\left(\frac{-8T_r}{F_n + 0.8L}\right) = " + f"{Ur*100:.2f}\\%")
-    else:
-        st.latex(r"U_r = 1 - \exp\left(\frac{-8T_r}{F_n}\right) = " + f"{Ur*100:.2f}\\%")
-        
-    # 7. คำนวณ Uv
-    Tv = (Cv * t) / (Hd**2)
-    Uv = math.sqrt(4 * Tv) / math.pi # ประมาณการสำหรับ Uv <= 60%
-    st.latex(r"T_v = \frac{C_v \cdot t}{H_d^2} = " + f"{Tv:.5f}")
-    st.latex(r"U_v \approx \frac{\sqrt{4 \cdot T_v}}{\pi} = " + f"{Uv*100:.2f}\\%")
-    
-    # 8. คำนวณ Uav
-    Uav = 1 - (1 - Ur) * (1 - Uv)
-    st.latex(r"U_{av} = 1 - (1 - U_r)(1 - U_v) = " + f"{Uav*100:.2f}\\%")
+    @staticmethod
+    def calc_radial_consolidation_coeff(Cv: float, kr_kv_ratio: float) -> float:
+        """
+        คำนวณสัมประสิทธิ์การอัดตัวคายน้ำตามแนวรัศมี (Cr)
+        :param Cv: สัมประสิทธิ์การอัดตัวคายน้ำในแนวดิ่ง
+        :param kr_kv_ratio: อัตราส่วนความสามารถในการซึมน้ำ (kr/kv) ปกติอยู่ระหว่าง 4-10
+        :return: Cr (หน่วยเดียวกับ Cv เช่น cm^2/day)
+        """
+        return kr_kv_ratio * Cv
 
-st.markdown("---")
-st.subheader("การคำนวณการทรุดตัว (Settlement)")
-S_final = H * (Cc / (1 + e0)) * math.log10((sigma0 + d_sigma) / sigma0)
-St = Uav * S_final
+    @staticmethod
+    def calc_time_factor_radial(Cr: float, t: float, de: float) -> float:
+        """
+        คำนวณตัวประกอบเวลาในแนวรัศมี (Tr)
+        :param Cr: สัมประสิทธิ์การอัดตัวคายน้ำตามแนวรัศมี
+        :param t: เวลาที่พิจารณา
+        :param de: เส้นผ่านศูนย์กลางอิทธิพล
+        :return: Tr (ระวังเรื่องหน่วย Cr, t, de ต้องสอดคล้องกัน)
+        """
+        return (Cr * t) / (de**2)
 
-col3, col4 = st.columns(2)
-with col3:
-    st.latex(r"S_{final} = H \cdot \frac{C_c}{1+e_0} \cdot \log\left(\frac{\sigma'_0 + \Delta\sigma}{\sigma'_0}\right)")
-    st.metric(label="การทรุดตัวสูงสุด (S_final)", value=f"{S_final:.4f} m")
-with col4:
-    st.latex(r"S_t = U_{av} \times S_{final}")
-    st.metric(label=f"การทรุดตัวที่เวลา {t} วัน (S_t)", value=f"{St:.4f} m")
+    @staticmethod
+    def calc_time_factor_vertical(Cv: float, t: float, Hd: float) -> float:
+        """
+        คำนวณตัวประกอบเวลาในแนวดิ่ง (Tv)
+        :param Cv: สัมประสิทธิ์การอัดตัวคายน้ำในแนวดิ่ง
+        :param t: เวลา
+        :param Hd: ระยะทางระบายน้ำที่ไกลที่สุด (Drainage path)
+        :return: Tv (ระวังเรื่องหน่วย Cv, t, Hd ต้องสอดคล้องกัน)
+        """
+        return (Cv * t) / (Hd**2)
 
-# ================= ส่วนของการสร้างกราฟแสดงความสัมพันธ์ตามเวลา =================
-st.markdown("---")
-st.subheader("กราฟแสดงความสัมพันธ์ของการทรุดตัวตามระยะเวลา (0 ถึง 365 วัน)")
+    @staticmethod
+    def calc_degree_of_vertical_consolidation(Tv: float) -> float:
+        """
+        คำนวณระดับการอัดตัวคายน้ำในแนวดิ่ง (Uv) ตามทฤษฎี Terzaghi
+        *อ้างอิงตามสมการในสไลด์: Uv = sqrt(4 * Tv) / pi (สำหรับ Uv <= 60%)
+        :param Tv: ตัวประกอบเวลาในแนวดิ่ง
+        :return: Uv (ในรูปทศนิยม)
+        """
+        return math.sqrt(4 * Tv) / math.pi
 
-time_array = np.arange(1, 366, 5)
-Uav_array = []
-St_array = []
+    @staticmethod
+    def calc_sand_mat_resistance(n: float, H: float, Hm: float, kc: float, km: float, B: float, dw: float) -> float:
+        """
+        คำนวณดัชนีความต้านทานต่อการระบายน้ำของ Sand Mat (L)
+        :param n: ค่าอัตราส่วนพื้นที่ระบายน้ำ (de/dw)
+        :param H: ความลึกของชั้นดินเหนียว
+        :param Hm: ความหนาของแผ่นทราย (Sand Mat)
+        :param kc: ค่าการซึมน้ำของดินเหนียว (เช่น cm/s)
+        :param km: ค่าการซึมน้ำของแผ่นทราย (เช่น cm/s)
+        :param B: ครึ่งหนึ่งของความกว้างแผ่นทราย
+        :param dw: เส้นผ่านศูนย์กลางสมมูลของ PVD
+        :return: ดัชนีความต้านทาน L (หน่วยของ H,Hm และ B,dw และ kc,km ต้องสอดคล้องกัน)
+        """
+        term1 = 32 / (math.pi**2)
+        term2 = 1 / (n**2)
+        term3 = H / Hm
+        term4 = kc / km
+        term5 = (B / dw)**2
+        return term1 * term2 * term3 * term4 * term5
 
-for time_step in time_array:
-    # คำนวณ Tr, Ur ใหม่ตามเวลา
-    temp_Tr = (Cr * time_step) / (de**2)
-    temp_Ur = 1 - math.exp((-8 * temp_Tr) / (Fn + 0.8 * L))
-    
-    # คำนวณ Tv, Uv ใหม่ตามเวลา
-    temp_Tv = (Cv * time_step) / (Hd**2)
-    temp_Uv = math.sqrt(4 * temp_Tv) / math.pi
-    if temp_Uv > 1.0: temp_Uv = 1.0 # Limit upper bound
-    
-    # คำนวณ Uav และ St ใหม่
-    temp_Uav = 1 - (1 - temp_Ur) * (1 - temp_Uv)
-    temp_St = temp_Uav * S_final
-    
-    Uav_array.append(temp_Uav * 100)
-    St_array.append(temp_St)
+    @staticmethod
+    def calc_degree_of_radial_consolidation(Tr: float, Fn: float, L: float = 0.0) -> float:
+        """
+        คำนวณระดับการอัดตัวคายน้ำตามแนวรัศมี (Ur) 
+        *หากมีการพิจารณาผลของ Sand Mat ให้ใส่ค่า L 
+        :param Tr: ตัวประกอบเวลาในแนวรัศมี
+        :param Fn: ตัวประกอบระยะห่าง
+        :param L: ดัชนีความต้านทานของ Sand Mat (ค่าเริ่มต้น = 0.0 ไม่คิดผลกระทบ)
+        :return: Ur (ในรูปทศนิยม)
+        """
+        denominator = Fn + (0.8 * L)
+        return 1.0 - math.exp((-8 * Tr) / denominator)
 
-fig, ax1 = plt.subplots(figsize=(10, 5))
+    @staticmethod
+    def calc_average_degree_of_consolidation(Ur: float, Uv: float) -> float:
+        """
+        คำนวณระดับการอัดตัวคายน้ำเฉลี่ยรวม (Uav) ตามทฤษฎีของ Carillo (1942)
+        :param Ur: ระดับการอัดตัวคายน้ำตามแนวรัศมี (ทศนิยม)
+        :param Uv: ระดับการอัดตัวคายน้ำในแนวดิ่ง (ทศนิยม)
+        :return: Uav (ในรูปทศนิยม)
+        """
+        return 1.0 - ((1.0 - Ur) * (1.0 - Uv))
 
-color = 'tab:blue'
-ax1.set_xlabel('Time (Days)')
-ax1.set_ylabel('Settlement (m)', color=color)
-ax1.plot(time_array, St_array, color=color, linewidth=2, label='Settlement (m)')
-ax1.tick_params(axis='y', labelcolor=color)
-ax1.axhline(y=S_final, color='tab:blue', linestyle='--', alpha=0.5, label='Ultimate Settlement')
+    @staticmethod
+    def calc_ultimate_settlement(H: float, Cc: float, e0: float, sigma0_prime: float, delta_sigma: float) -> float:
+        """
+        คำนวณค่าการยุบตัวสุดท้ายสูงสุด (Ultimate Settlement: S_final)
+        :param H: ความหนาของชั้นดินอ่อน
+        :param Cc: Compression Index
+        :param e0: Void ratio เริ่มต้น
+        :param sigma0_prime: Effective Overburden Stress เดิม
+        :param delta_sigma: ความดันน้ำหนักบรรทุกที่เพิ่มขึ้น (เช่น จาก Preloading)
+        :return: S_final (หน่วยเดียวกับ H)
+        """
+        stress_ratio = (sigma0_prime + delta_sigma) / sigma0_prime
+        return H * (Cc / (1 + e0)) * math.log10(stress_ratio)
 
-ax2 = ax1.twinx()  
-color = 'tab:red'
-ax2.set_ylabel('Degree of Consolidation (%)', color=color)  
-ax2.plot(time_array, Uav_array, color=color, linewidth=2, linestyle='-.', label='Degree of Consolidation (%)')
-ax2.tick_params(axis='y', labelcolor=color)
-ax2.set_ylim([0, 105])
-
-fig.tight_layout()  
-st.pyplot(fig)
+    @staticmethod
+    def calc_settlement_at_t(Uav: float, S_final: float) -> float:
+        """
+        คำนวณค่าการยุบตัวที่เกิดขึ้น ณ เวลา t (St)
+        :param Uav: ระดับการอัดตัวคายน้ำเฉลี่ยรวม (ทศนิยม)
+        :param S_final: ค่าการยุบตัวสุดท้าย
+        :return: St (หน่วยเดียวกับ S_final)
+        """
+        return Uav * S_final
